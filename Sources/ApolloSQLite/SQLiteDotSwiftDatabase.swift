@@ -4,6 +4,7 @@ import Apollo
 #endif
 import SQLite
 
+/// An implementation of `SQLiteDatabase` which uses the `SQLite.swift` wrapper library. 
 public final class SQLiteDotSwiftDatabase: SQLiteDatabase {
   private var db: Connection!
   
