@@ -4,7 +4,7 @@ import Foundation
 public typealias CacheKeyForObject = (_ object: JSONObject) -> JSONValue?
 public typealias DidChangeKeysFunc = (Set<CacheKey>, UUID?) -> Void
 
-func rootCacheKey<Operation: GraphQLOperation>(for operation: Operation) -> String {
+public func rootCacheKey<Operation: GraphQLOperation>(for operation: Operation) -> String {
   switch operation.operationType {
   case .query:
     return "QUERY_ROOT"

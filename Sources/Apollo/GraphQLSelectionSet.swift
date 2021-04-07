@@ -33,9 +33,9 @@ public protocol GraphQLSelection {
 }
 
 public struct GraphQLField: GraphQLSelection {
-  let name: String
+  public let name: String
   let alias: String?
-  let arguments: [String: GraphQLInputValue]?
+  public let arguments: [String: GraphQLInputValue]?
 
   var responseKey: String {
     return alias ?? name
@@ -96,9 +96,9 @@ private func orderIndependentKey(for object: JSONObject) -> String {
 }
 
 public struct GraphQLBooleanCondition: GraphQLSelection {
-  let variableName: String
-  let inverted: Bool
-  let selections: [GraphQLSelection]
+  public let variableName: String
+  public let inverted: Bool
+  public let selections: [GraphQLSelection]
 
   public init(variableName: String,
               inverted: Bool,
