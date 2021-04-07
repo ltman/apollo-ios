@@ -110,3 +110,118 @@ public final class GraphQLQueryWatcher<Query: GraphQLQuery>: Cancellable, Apollo
     }
   }
 }
+
+public class BditQueryWatcher<Query: GraphQLQuery>: Cancellable, ApolloStoreSubscriber {
+  weak var client: ApolloClientProtocol?
+  public let query: Query
+  let resultHandler: GraphQLResultHandler<Query.Data>
+  
+  private let contextIdentifier = UUID()
+  
+  private var fetching: Atomic<Cancellable?> = Atomic(nil)
+  
+  private var dependentKeys: Atomic<Set<CacheKey>?> = Atomic(nil)
+  
+  private var additionalHeaders: [String: String]
+  
+  /// Designated initializer
+  ///
+  /// - Parameters:
+  ///   - client: The client protocol to pass in
+  ///   - query: The query to watch
+  ///   - resultHandler: The result handler to call with changes.
+  init(client: ApolloClientProtocol,
+       query: Query,
+       additionalHeaders: [String: String],
+       resultHandler: @escaping GraphQLResultHandler<Query.Data>) {
+    self.client = client
+    self.query = query
+    self.additionalHeaders = additionalHeaders
+    self.resultHandler = resultHandler
+    
+    client.store.subscribe(self)
+  }
+  
+  /// Refetch a query from the server.
+  public func refetch() {
+    fetch(cachePolicy: .fetchIgnoringCacheData)
+  }
+  
+  // Watchers always call result handlers on the main queue.
+  private let callbackQueue: DispatchQueue = .main
+  
+  public func fetch(cachePolicy: CachePolicy) {
+    fetching.mutate {
+      // Cancel anything already in flight before starting a new fetch
+      $0?.cancel()
+      if let client = client as? ApolloClient {
+        $0 = client.fetch(query: query, cachePolicy: cachePolicy, contextIdentifier: self.contextIdentifier, queue: callbackQueue, additionalHeaders: additionalHeaders) { [weak self] result in
+          guard let self = self else { return }
+          
+          switch result {
+          case .success(let graphQLResult):
+            self.dependentKeys.mutate {
+              $0 = graphQLResult.dependentKeys
+            }
+          case .failure:
+            break
+          }
+          
+          self.resultHandler(result)
+        }
+      }
+    }
+  }
+  
+  /// Cancel any in progress fetching operations and unsubscribe from the store.
+  public func cancel() {
+    fetching.value?.cancel()
+    client?.store.unsubscribe(self)
+  }
+  
+  func store(_ store: ApolloStore,
+             didChangeKeys changedKeys: Set<CacheKey>,
+             contextIdentifier: UUID?) {
+    if
+      let incomingIdentifier = contextIdentifier,
+      incomingIdentifier == self.contextIdentifier {
+      // This is from changes to the keys made from the `fetch` method above,
+      // changes will be returned through that and do not need to be returned
+      // here as well.
+      return
+    }
+    
+    guard let dependentKeys = self.dependentKeys.value else {
+      // This query has nil dependent keys, so nothing that changed will affect it.
+      return
+    }
+    
+    if !dependentKeys.isDisjoint(with: changedKeys) {
+      // First, attempt to reload the query from the cache directly, in order not to interrupt any in-flight server-side fetch.
+      store.load(query: self.query) { [weak self] result in
+        guard let self = self else { return }
+        
+        switch result {
+        case .success(let graphQLResult):
+          self.callbackQueue.async { [weak self] in
+            guard let self = self else {
+              return
+            }
+            
+            self.dependentKeys.mutate {
+              $0 = graphQLResult.dependentKeys
+            }
+            self.resultHandler(result)
+          }
+        case .failure:
+          // If the cache fetch is not successful, for instance if the data is missing, refresh from the server.
+          self.fetch(cachePolicy: .fetchIgnoringCacheData)
+        }
+      }
+    }
+  }
+}
+
+
+
+

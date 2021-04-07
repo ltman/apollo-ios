@@ -156,4 +156,112 @@ extension ApolloClient: ApolloClientProtocol {
   }
 }
 
+public extension ApolloClient {
+  @discardableResult
+  func fetch<Query: GraphQLQuery>(
+    query: Query,
+    cachePolicy: CachePolicy,
+    contextIdentifier: UUID?,
+    queue: DispatchQueue,
+    additionalHeaders: [String: String] = [:],
+    resultHandler: GraphQLResultHandler<Query.Data>?) -> Cancellable
+  {
+    if let networkTransport = self.networkTransport as? RequestChainNetworkTransport {
+      return networkTransport.send(operation: query,
+                                   additionalHeaders: additionalHeaders,
+                                   cachePolicy: cachePolicy,
+                                   contextIdentifier: contextIdentifier,
+                                   callbackQueue: queue) { result in
+        resultHandler?(result)
+      }
+    }
+    
+    return self.networkTransport.send(operation: query,
+                                      cachePolicy: cachePolicy,
+                                      contextIdentifier: contextIdentifier,
+                                      callbackQueue: queue) { result in
+      resultHandler?(result)
+    }
+  }
+  
+  @discardableResult
+  func perform<Mutation: GraphQLMutation>(
+    mutation: Mutation,
+    publishResultToStore: Bool = true,
+    queue: DispatchQueue = .main,
+    additionalHeaders: [String: String] = [:],
+    resultHandler: GraphQLResultHandler<Mutation.Data>? = nil) -> Cancellable
+  {
+    if let networkTransport = self.networkTransport as? RequestChainNetworkTransport {
+      return networkTransport.send(
+        operation: mutation,
+        additionalHeaders: additionalHeaders,
+        cachePolicy: publishResultToStore ? .default : .fetchIgnoringCacheCompletely,
+        contextIdentifier: nil,
+        callbackQueue: queue,
+        completionHandler: { result in
+          resultHandler?(result)
+        }
+      )
+    }
+    
+    return self.networkTransport.send(
+      operation: mutation,
+      cachePolicy: publishResultToStore ? .default : .fetchIgnoringCacheCompletely,
+      contextIdentifier: nil,
+      callbackQueue: queue,
+      completionHandler: { result in
+        resultHandler?(result)
+      }
+    )
+  }
+  
+  func watch<Query: GraphQLQuery>(
+    query: Query,
+    cachePolicy: CachePolicy = .returnCacheDataElseFetch,
+    additionalHeaders: [String: String] = [:],
+    resultHandler: @escaping GraphQLResultHandler<Query.Data>) -> BditQueryWatcher<Query>
+  {
+    let watcher = BditQueryWatcher(
+      client: self,
+      query: query,
+      additionalHeaders: additionalHeaders,
+      resultHandler: resultHandler
+    )
+    watcher.fetch(cachePolicy: cachePolicy)
+    return watcher
+  }
+}
+
+extension RequestChainNetworkTransport {
+  func send<Operation: GraphQLOperation>(
+    operation: Operation,
+    additionalHeaders: [String: String] = [:],
+    cachePolicy: CachePolicy = .default,
+    contextIdentifier: UUID? = nil,
+    callbackQueue: DispatchQueue = .main,
+    completionHandler: @escaping (Result<GraphQLResult<Operation.Data>, Error>) -> Void) -> Cancellable {
+    
+    let interceptors = self.interceptorProvider.interceptors(for: operation)
+    let chain = RequestChain(interceptors: interceptors, callbackQueue: callbackQueue)
+    chain.additionalErrorHandler = self.interceptorProvider.additionalErrorInterceptor(for: operation)
+    let request = self.constructRequest(for: operation,
+                                        cachePolicy: cachePolicy,
+                                        contextIdentifier: contextIdentifier)
+    
+    additionalHeaders.forEach { (key, value) in
+      request.addHeader(name: key, value: value)
+    }
+    
+    chain.kickoff(request: request, completion: completionHandler)
+    return chain
+  }
+  
+}
+
+
+
+
+
+
 
